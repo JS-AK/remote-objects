@@ -26,7 +26,7 @@ await runtime.dispose();
 npm install @js-ak/remote-objects
 ```
 
-Requires Node.js 18+. Works with both ESM and CommonJS:
+Requires Node.js 20.19+. Works with both ESM and CommonJS:
 
 ```ts
 import { Runtime, actor } from "@js-ak/remote-objects"; // ESM
