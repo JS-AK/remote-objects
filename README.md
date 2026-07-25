@@ -1,84 +1,121 @@
-# Example: Automatic Deployment of TypeScript App to npm with Scope
+# @js-ak/remote-objects
 
-## Overview
-This guide outlines the steps to automatically deploy a TypeScript application to npm with a specific scope using GitHub Actions. By setting up this workflow, you can streamline the process of updating and publishing your package to npm, ensuring seamless integration with your development pipeline.
+Actor-style remote objects on Node.js worker threads — write normal classes, call them like local instances.
 
-## Prerequisites
-Before proceeding, make sure you have the following:
+```ts
+import { Runtime, actor } from "@js-ak/remote-objects";
 
-- Access to the GitHub repository containing your TypeScript project.
-- An npm account with permissions to publish packages to the desired scope.
-- GitHub Personal Access Token (GH_TOKEN) with the necessary permissions to push changes and trigger GitHub Actions.
-- npm token (NPM_TOKEN) with permissions to publish packages.
+export class Counter {
+  constructor(public value = 0) {}
+  inc() {
+    this.value += 1;
+    return this.value;
+  }
+}
+actor(Counter, import.meta);
 
-## Workflow Setup
-To automate the deployment process, follow these steps:
+const runtime = new Runtime({ workers: 2 });
+const counter = await runtime.spawn(Counter, 10);
+console.log(await counter.inc()); // 11
+await runtime.dispose();
+```
 
-1. **Create Secrets**: In your GitHub repository, navigate to "Settings" > "Secrets" and add the following secrets:
-    - `GH_TOKEN`: GitHub Personal Access Token.
-    - `NPM_TOKEN`: npm token.
+## Install
 
-2. **Configure GitHub Actions Workflow**: Create or modify your GitHub Actions workflow file (e.g., `.github/workflows/deploy.yml`) to define the deployment steps. Below is a sample workflow file:
+```bash
+npm install @js-ak/remote-objects
+```
 
-    ```yaml
-    name: make-release
+Requires Node.js 18+. Works with both ESM and CommonJS:
 
-    on:
-      push:
-        branches:
-          - master
+```ts
+import { Runtime, actor } from "@js-ak/remote-objects"; // ESM
+```
 
-    jobs:
+```js
+const { Runtime, actor } = require("@js-ak/remote-objects"); // CJS
+```
 
-      runner-job:
-        runs-on: ubuntu-latest
+## Core ideas
 
-        steps:
-          - name: Check out repository code
-            uses: actions/checkout@v4
+- **`runtime.spawn(Class, ...args)`** creates an actor on a worker and returns a typed proxy
+- **Methods are always async** from the caller’s side (even if the class method is sync)
+- **Actors are sticky** — an instance stays on one worker until `destroy` / `dispose`
+- **`return this`** becomes an actor reference (same proxy identity), not a cloned object
+- **Workers are an implementation detail** — the public API is objects and methods
 
-          - name: Install dependencies
-            run: npm ci
+## Binding classes
 
-          - name: Run Tests
-            run: npm test
+Each actor class must be bound in its own module so workers know which file to load.
 
-      release:
-        name: Release
-        runs-on: ubuntu-latest
-        steps:
+ESM:
 
-          - name: Checkout
-            uses: actions/checkout@v4
-            with:
-              fetch-depth: 0
-              persist-credentials: false
+```ts
+import { actor } from "@js-ak/remote-objects";
 
-          - name: Setup Node.js
-            uses: actions/setup-node@v4
-            with:
-              node-version: '20'
-              registry-url: 'https://registry.npmjs.org'
+export class Database { /* ... */ }
+actor(Database, import.meta);
+```
 
-          - name: Install dependencies and build 🔧
-            run: npm ci && npm run build
+CJS:
 
-          - name: Make Release
-            run: npx semantic-release
-            env:
-              GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
-              NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-    ```
+```js
+const { actor } = require("@js-ak/remote-objects");
 
-    This workflow triggers on pushes to the `main` branch. It installs dependencies, builds the project, and then publishes it to npm.
+class Database { /* ... */ }
+actor(Database, __filename);
+// or: actor(Database, { filename: __filename })
+module.exports = { Database };
+```
 
-3. **Commit and Push Changes**: Commit the workflow file changes to your repository and push them to GitHub. This action triggers the workflow defined in the YAML file.
+`spawn` auto-registers the class on first use (or call `runtime.register(Database)` explicitly).
 
-4. **Monitor Deployment**: Once the workflow is triggered, monitor its progress in the "Actions" tab of your GitHub repository. You should see the workflow executing the defined steps.
+## Options
 
-5. **Verify Deployment**: After successful execution, verify that your TypeScript application has been deployed to npm with the specified scope.
+```ts
+new Runtime({
+  workers: 4,
+  debug: true, // or (event) => { ... } or { onEvent: (event) => { ... } }
+  callTimeoutMs: 5_000,
+});
+```
 
-## Conclusion
-By implementing this GitHub Actions workflow, you've automated the process of deploying your TypeScript application to npm, saving time and ensuring consistency in your development workflow. With secrets management and continuous integration in place, you can confidently publish updates to your npm package with ease.
+Debug events include `register`, `spawn`, `destroy`, `call:start`, `call:end`, `dispose`. Spawn/call events carry `actorId` as `"workerId:objectId"`.
 
-Happy coding!
+## Lifecycle
+
+```ts
+await runtime.destroy(counter); // drop one actor
+await runtime.dispose();        // close actors (dispose/close if present), drain, terminate workers
+await runtime.dispose({ closeActors: false });
+```
+
+After `dispose`, further `spawn` / method calls fail with a clear error.
+
+## Passing actors as arguments
+
+Proxies can be passed into methods (including across workers):
+
+```ts
+await linker.link(counter);
+await linker.readOther();
+```
+
+## Helpers
+
+```ts
+import { getActorHandle } from "@js-ak/remote-objects";
+
+const handle = getActorHandle(counter); // { workerId, objectId } | undefined
+```
+
+## Limits
+
+- Arguments and results must be structured-clone compatible (plus actor refs)
+- You cannot read instance fields through the proxy — only call methods
+- Overlapping calls to the **same** actor are queued (mailbox); different actors may run in parallel
+- Actors are not migrated between workers; identity is fixed at spawn
+
+## License
+
+MIT

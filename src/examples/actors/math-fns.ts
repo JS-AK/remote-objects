@@ -1,0 +1,19 @@
+/** Pure helpers — imported by the actor module on the worker. */
+export function add(a: number, b: number): number {
+	return a + b;
+}
+
+export function fib(n: number): number {
+	if (n <= 1) return n;
+	let a = 0;
+	let b = 1;
+
+	for (let i = 2; i <= n; i++) {
+		const next = a + b;
+
+		a = b;
+		b = next;
+	}
+
+	return b;
+}
