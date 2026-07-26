@@ -1,7 +1,7 @@
 {
   "name": "@js-ak/remote-objects",
   "version": "1.0.0",
-  "description": "Actor-style remote objects over workers with a familiar class API",
+  "description": "Actor-style remote objects on Node.js worker threads - write normal classes, call them like local instances.",
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
@@ -61,18 +61,26 @@
   },
   "keywords": [
     "actors",
-    "workers",
-    "runtime",
+    "actor-model",
+    "worker-threads",
+    "nodejs",
+    "typescript",
+    "concurrency",
     "parallel",
+    "proxy",
     "remote-objects",
-    "worker-threads"
+    "multithreading",
+    "rpc"
   ],
-  "author": "JS-AK",
+  "author": {
+    "name": "JS-AK",
+    "url": "https://github.com/JS-AK"
+  },
   "license": "MIT",
   "bugs": {
     "url": "https://github.com/JS-AK/remote-objects/issues"
   },
-  "homepage": "https://github.com/JS-AK/remote-objects#readme",
+  "homepage": "https://js-ak.github.io/remote-objects",
   "devDependencies": {
     "@eslint/compat": "2.1.0",
     "@js-ak/db-manager": "3.50.1",
