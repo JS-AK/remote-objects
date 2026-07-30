@@ -1,3 +1,9 @@
+/**
+ * Public API for `@js-ak/remote-objects`.
+ *
+ * Actor-style remote objects on Node.js worker threads — write normal classes,
+ * bind them with {@link actor}, spawn via {@link Runtime}, call through typed proxies.
+ */
 export type {
 	ActorClass,
 	ActorHandle,
@@ -5,6 +11,7 @@ export type {
 	AnyActorClass,
 	DebugEvent,
 	DebugHandler,
+	DestroyOptions,
 	RuntimeDebug,
 	RuntimeOptions,
 } from "./types.js";

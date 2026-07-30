@@ -31,6 +31,10 @@ jobs:
       - name: Run Tests
         run: npm test
 
+      - name: Coverage thresholds
+        if: matrix.node-version == '24'
+        run: npm run test:coverage
+
   release:
     name: Release
     needs: test
