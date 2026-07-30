@@ -46,10 +46,14 @@
     "postbuild:cjs": "node scripts/write-cjs-package.js && node scripts/fix-cjs-import-meta.js",
     "test": "npm run build && npm run test:unit && node --test src/test/cjs-require.test.js",
     "test:unit": "vitest run --config vitest.unit.config.js",
+    "test:coverage": "npm run build && vitest run --config vitest.unit.config.js --coverage",
+    "bench": "npm run build && node build/esm/examples/bench.js",
     "example:counter": "npm run build && node build/esm/examples/counter.js",
     "example:return-this": "npm run build && node build/esm/examples/return-this.js",
     "example:db": "npm run build && node build/esm/examples/db.js",
     "example:fn": "npm run build && node build/esm/examples/fn.js",
+    "example:callbacks": "npm run build && node build/esm/examples/callbacks.js",
+    "example:streams": "npm run build && node build/esm/examples/streams.js",
     "example:cjs": "npm run build && node src/examples/cjs/counter.cjs"
   },
   "engines": {

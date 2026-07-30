@@ -9,6 +9,7 @@ export default tseslint.config(
 	{
 		ignores: [
 			"build/**",
+			"coverage/**",
 			"docs/**",
 			"eslint.config.js",
 			"vitest.*.js",

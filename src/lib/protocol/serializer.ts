@@ -1,43 +1,211 @@
-import { actorRef, isActorRef } from "./refs.js";
-import type { ActorRef } from "./messages.js";
+import type {
+	ActorRef, CallbackRef, StreamRef,
+} from "./messages.js";
+import {
+	isActorRef, isCallbackRef, isStreamRef,
+} from "./refs.js";
+import { isPlainObject } from "./plain.js";
 
-export type EncodeContext = {
-	workerId: number;
-	currentObject: object;
-	currentObjectId: number;
-	/** Optional map of known live actors in this worker. */
-	actors?: Map<object, number>;
+/** Hooks used when turning wire tags back into local values / stubs. */
+export type DecodeContext = {
+	resolveActorRef: (ref: ActorRef) => unknown;
+	resolveCallbackRef?: (ref: CallbackRef) => unknown;
+	resolveStreamRef?: (ref: StreamRef) => unknown;
 };
 
 /**
- * Encodes method return values before crossing the worker boundary.
- * `return this` becomes an actor_ref, not a state dump.
+ * Hooks used when turning local values into wire tags before `postMessage`.
+ * Actors, callbacks, and streams are replaced with refs; arrays/plain objects are walked.
+ */
+export type EncodeContext = {
+	workerId?: number;
+	currentObject?: object;
+	currentObjectId?: number;
+	/** Optional map of known live actors in this worker. */
+	actors?: Map<object, number>;
+	/** Host-side: resolve actor proxies to handles. */
+	resolveProxy?: (value: unknown) => { workerId: number; objectId: number; } | undefined;
+	registerCallback?: (fn: (...args: never[]) => unknown) => CallbackRef;
+	registerStream?: (value: object) => StreamRef | undefined;
+};
+
+/**
+ * Encodes / decodes values crossing the worker boundary.
+ * Deep-walks arrays and plain objects; tags actors, callbacks, and streams.
  */
 export class Serializer {
-	encode(value: unknown, context: EncodeContext): unknown {
-		if (value === context.currentObject) {
-			return actorRef(context.workerId, context.currentObjectId);
+	/**
+	 * Encodes a value for the wire (deep-walk + refs).
+	 * @param value - Return value or argument tree
+	 * @param context - Actor / callback / stream registration hooks
+	 * @returns Value safe to send via `postMessage`
+	 */
+	encode(value: unknown, context: EncodeContext = {}): unknown {
+		return this.walkEncode(value, context, new WeakSet<object>());
+	}
+
+	/**
+	 * Decodes a wire value into local actors, callback stubs, or stream proxies.
+	 * @param value - Value received over `postMessage`
+	 * @param context - Resolvers for each ref kind
+	 * @returns Local value or stub/proxy
+	 */
+	decode(value: unknown, context: DecodeContext): unknown {
+		return this.walkDecode(value, context, new WeakSet<object>());
+	}
+
+	/**
+	 * Recursive encode walk. Throws on circular plain-object graphs.
+	 * @param value - Current node
+	 * @param context - Encode hooks
+	 * @param seen - Cycle detection set
+	 * @returns Encoded node
+	 */
+	private walkEncode(
+		value: unknown,
+		context: EncodeContext,
+		seen: WeakSet<object>,
+	): unknown {
+		if (value === null || typeof value !== "object") {
+			if (typeof value === "function") {
+				if (!context.registerCallback) {
+					throw new Error(
+						"Functions cannot cross the worker boundary without callback support",
+					);
+				}
+
+				return context.registerCallback(
+					value as (...args: never[]) => unknown,
+				);
+			}
+
+			return value;
+		}
+
+		if (
+			context.currentObject !== undefined
+			&& value === context.currentObject
+			&& context.currentObjectId !== undefined
+			&& context.workerId !== undefined
+		) {
+			return {
+				objectId: context.currentObjectId,
+				type: "actor_ref",
+				workerId: context.workerId,
+			} satisfies ActorRef;
 		}
 
 		if (context.actors) {
-			const objectId = context.actors.get(value as object);
+			const objectId = context.actors.get(value);
 
-			if (objectId !== undefined) {
-				return actorRef(context.workerId, objectId);
+			if (objectId !== undefined && context.workerId !== undefined) {
+				return {
+					objectId,
+					type: "actor_ref",
+					workerId: context.workerId,
+				} satisfies ActorRef;
 			}
 		}
 
-		return value;
-	}
+		const proxyHandle = context.resolveProxy?.(value);
 
-	decode(
-		value: unknown,
-		resolveRef: (ref: ActorRef) => unknown,
-	): unknown {
-		if (isActorRef(value)) {
-			return resolveRef(value);
+		if (proxyHandle) {
+			return {
+				objectId: proxyHandle.objectId,
+				type: "actor_ref",
+				workerId: proxyHandle.workerId,
+			} satisfies ActorRef;
 		}
 
-		return value;
+		if (context.registerStream) {
+			const ref = context.registerStream(value);
+
+			if (ref) return ref;
+		}
+
+		if (seen.has(value)) {
+			throw new Error(
+				"Circular references are not supported when encoding values for remote calls",
+			);
+		}
+
+		if (Array.isArray(value)) {
+			seen.add(value);
+
+			return value.map((item) => this.walkEncode(item, context, seen));
+		}
+
+		if (!isPlainObject(value)) {
+			return value;
+		}
+
+		seen.add(value);
+		const out: Record<string, unknown> = {};
+
+		for (const [key, item] of Object.entries(value)) {
+			out[key] = this.walkEncode(item, context, seen);
+		}
+
+		return out;
+	}
+
+	/**
+	 * Recursive decode walk for arrays and plain objects.
+	 * @param value - Current wire node
+	 * @param context - Decode hooks
+	 * @param seen - Cycle detection set
+	 * @returns Decoded node
+	 */
+	private walkDecode(
+		value: unknown,
+		context: DecodeContext,
+		seen: WeakSet<object>,
+	): unknown {
+		if (isActorRef(value)) {
+			return context.resolveActorRef(value);
+		}
+
+		if (isCallbackRef(value)) {
+			if (!context.resolveCallbackRef) {
+				throw new Error("Callback refs are not supported in this context");
+			}
+
+			return context.resolveCallbackRef(value);
+		}
+
+		if (isStreamRef(value)) {
+			if (!context.resolveStreamRef) {
+				throw new Error("Stream refs are not supported in this context");
+			}
+
+			return context.resolveStreamRef(value);
+		}
+
+		if (value === null || typeof value !== "object") {
+			return value;
+		}
+
+		if (seen.has(value)) {
+			return value;
+		}
+
+		if (Array.isArray(value)) {
+			seen.add(value);
+
+			return value.map((item) => this.walkDecode(item, context, seen));
+		}
+
+		if (!isPlainObject(value)) {
+			return value;
+		}
+
+		seen.add(value);
+		const out: Record<string, unknown> = {};
+
+		for (const [key, item] of Object.entries(value)) {
+			out[key] = this.walkDecode(item, context, seen);
+		}
+
+		return out;
 	}
 }
