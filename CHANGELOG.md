@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/JS-AK/remote-objects/compare/v1.0.0...v1.1.0) (2026-07-30)
+
+
+### Features
+
+* add callbacks, Node streams, and deep wire encoding ([8a95667](https://github.com/JS-AK/remote-objects/commit/8a95667e2ff95cf55213ca0c53336b415c494479))
+
 # 1.0.0 (2026-07-25)
 
 
