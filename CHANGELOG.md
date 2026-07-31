@@ -1,3 +1,10 @@
+## [1.2.1](https://github.com/JS-AK/remote-objects/compare/v1.2.0...v1.2.1) (2026-07-31)
+
+
+### Bug Fixes
+
+* **serializer:** encode shared object refs in DAGs ([4112bef](https://github.com/JS-AK/remote-objects/commit/4112bef4ceff5d4ecb5d277c04eddc2b9e36beee))
+
 # [1.2.0](https://github.com/JS-AK/remote-objects/compare/v1.1.0...v1.2.0) (2026-07-31)
 
 
