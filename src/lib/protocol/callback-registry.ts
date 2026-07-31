@@ -18,6 +18,8 @@ export type CallbackOwner = "host" | number;
  */
 export class CallbackRegistry {
 	private readonly entries = new Map<number, CallbackEntry>();
+	/** Reverse index: actor objectId → callback ids bound to it. */
+	private readonly boundByObject = new Map<number, Set<number>>();
 	private nextId = 1;
 	private readonly owner: CallbackOwner;
 
@@ -49,6 +51,9 @@ export class CallbackRegistry {
 		}
 
 		this.entries.set(callbackId, entry);
+		if (entry.boundObjectId !== undefined) {
+			this.trackBound(entry.boundObjectId, callbackId);
+		}
 
 		return callbackRef(this.owner, callbackId);
 	}
@@ -84,7 +89,7 @@ export class CallbackRegistry {
 	 */
 	release(callbackIds: Iterable<number>): void {
 		for (const id of callbackIds) {
-			this.entries.delete(id);
+			this.removeEntry(id);
 		}
 	}
 
@@ -97,25 +102,71 @@ export class CallbackRegistry {
 			const entry = this.entries.get(id);
 
 			if (entry?.callScoped) {
-				this.entries.delete(id);
+				this.removeEntry(id);
 			}
 		}
 	}
 
 	/**
 	 * Drops callbacks returned by a given actor (on destroy).
+	 * Uses a reverse index for O(k) cleanup where k is callbacks bound to the actor.
 	 * @param objectId - Actor that owned the returned callbacks
 	 */
 	releaseBoundToObject(objectId: number): void {
-		for (const [id, entry] of this.entries) {
-			if (entry.boundObjectId === objectId) {
-				this.entries.delete(id);
-			}
+		const ids = this.boundByObject.get(objectId);
+
+		if (!ids) return;
+		for (const id of ids) {
+			this.entries.delete(id);
 		}
+		this.boundByObject.delete(objectId);
 	}
 
 	/** Removes every registered callback. */
 	clear(): void {
 		this.entries.clear();
+		this.boundByObject.clear();
+	}
+
+	/**
+	 * Drops one entry and keeps {@link boundByObject} in sync.
+	 * @param callbackId - Id to remove
+	 */
+	private removeEntry(callbackId: number): void {
+		const entry = this.entries.get(callbackId);
+
+		if (!entry) return;
+		if (entry.boundObjectId !== undefined) {
+			this.untrackBound(entry.boundObjectId, callbackId);
+		}
+		this.entries.delete(callbackId);
+	}
+
+	/**
+	 * @param objectId - Actor that owns returned callbacks
+	 * @param callbackId - Registered callback id
+	 */
+	private trackBound(objectId: number, callbackId: number): void {
+		let ids = this.boundByObject.get(objectId);
+
+		if (!ids) {
+			ids = new Set();
+			this.boundByObject.set(objectId, ids);
+		}
+		ids.add(callbackId);
+	}
+
+	/**
+	 * @param objectId - Actor that owned the callback
+	 * @param callbackId - Registered callback id
+	 */
+	private untrackBound(objectId: number, callbackId: number): void {
+		const ids = this.boundByObject.get(objectId);
+
+		if (!ids) return;
+		ids.delete(callbackId);
+		if (ids.size === 0) {
+			this.boundByObject.delete(objectId);
+		}
 	}
 }

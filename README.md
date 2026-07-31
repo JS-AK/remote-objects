@@ -39,6 +39,7 @@ const { Runtime, actor } = require("@js-ak/remote-objects"); // CJS
 ## Core ideas
 
 - **`runtime.spawn(Class, ...args)`** creates an actor on a worker and returns a typed proxy
+- **`runtime.getOrSpawn(key, Class, ...args)`** returns one actor per key (same proxy until `destroy`); placement is `hash(key) % workers`
 - **Methods are always async** from the caller’s side (even if the class method is sync)
 - **Actors are sticky** — an instance stays on one worker until `destroy` / `dispose`
 - **`return this`** becomes an actor reference (same proxy identity), not a cloned object
@@ -69,7 +70,7 @@ actor(Database, __filename);
 module.exports = { Database };
 ```
 
-`spawn` auto-registers the class on first use (or call `runtime.register(Database)` explicitly).
+`spawn` and `getOrSpawn` auto-register the class on first use (or call `runtime.register(Database)` explicitly).
 
 ## Options
 
@@ -81,7 +82,7 @@ new Runtime({
 });
 ```
 
-Debug events include `register`, `spawn`, `destroy`, `call:start`, `call:end`, `call:timeout`, `worker:error`, `bridge:call`, `bridge:result`, `dispose`. Spawn/call events carry `actorId` as `"workerId:objectId"`.
+Debug events include `register`, `spawn`, `destroy`, `call:start`, `call:end`, `call:timeout`, `worker:error`, `bridge:call`, `bridge:result`, `dispose`. Spawn/call events carry `actorId` as `"workerId:objectId"`. **`getOrSpawn` emits the same `spawn` event** when it creates a new actor (cache hits do not spawn again).
 
 ## Lifecycle
 
@@ -92,7 +93,7 @@ await runtime.dispose();        // close actors, drain, terminate workers
 await runtime.dispose({ closeActors: false });
 ```
 
-After `dispose`, further `spawn` / method calls fail with a clear error.
+After `dispose`, further `spawn`, `getOrSpawn`, or method calls fail with a clear error.
 
 ## Passing actors as arguments
 
@@ -145,6 +146,54 @@ Use sticky actors when a worker should own long-lived state (DB pools, SDK clien
 
 Same-actor calls are serialized (mailbox). Different actors may run in parallel on the pool.
 
+## When to use what
+
+You do not need to predict every app up front — pick a pattern from what you are doing:
+
+| You want… | Use |
+|-----------|-----|
+| Long-lived client state (DB pool, SDK session, in-memory cache) | One actor per resource; or **`getOrSpawn(key, ...)`** for one actor per tenant/shard |
+| More throughput on CPU or I/O | `workers: 2+` and **separate** actor instances (each spawn → least-loaded worker) |
+| Strict ordering for one object | One actor — overlapping calls on the same proxy are queued (mailbox) |
+| Parallel work on the same class | Multiple `spawn`s, or `getOrSpawn` + extra `spawn`s (see `examples/db.ts`) |
+| Progress / one-off handlers during a call | Callback in **args** (released when the call finishes) |
+| Long-lived handler returned from a method | Callback in **return value** (released on `destroy` of the owning actor) |
+| Many rows or chunked I/O | Streams as args or results (backpressure built in) |
+| Compose actors (even on different workers) | Pass actor proxies as method arguments |
+| Shut down one resource | `destroy(proxy)` — runs `close`/`dispose` on the actor by default |
+| Shut down the whole runtime | `dispose()` — drain in-flight work, then terminate workers |
+
+**Worker count**
+
+- **`workers: 1`** — simplest mental model; all actors share one thread. Good for getting started or when isolation from the main thread is enough.
+- **`workers: 2+`** — use when you want parallel actors on separate threads. Each new spawn is placed on the worker with the fewest live actors and in-flight requests; after that the actor stays sticky on that worker.
+
+**One actor vs many**
+
+- **One proxy, many calls** — state and side effects stay in one place; calls do not overlap on that instance.
+- **Many proxies, same class** — independent state and true parallelism (e.g. two query actors, two connection pools).
+
+**One actor per tenant / key**
+
+Use **`getOrSpawn(key, Class, ...args)`** — the runtime keeps one proxy per key until `destroy`. The worker is chosen by `hash(key) % workers` and stays stable for that key. Reusing a key with a different class or constructor args throws.
+
+```ts
+const db = await runtime.getOrSpawn(`tenant:${tenantId}`, Database, creds);
+// later, same process → same proxy / same pool
+const same = await runtime.getOrSpawn(`tenant:${tenantId}`, Database, creds);
+expect(same).toBe(db);
+
+await runtime.destroy(db); // drops the key; next getOrSpawn creates a fresh actor
+```
+
+For **many independent instances** of the same class (parallel pools), use **`spawn`** instead. **`spawn` does not register a key** — `spawn(Database, creds)` and `getOrSpawn("db", Database, creds)` are always separate actors.
+
+**Not a fit**
+
+- Fire-and-forget stateless jobs on a pile of plain data → a task pool (e.g. Piscina) may be simpler.
+- Shared mutable state on the main thread with no isolation → you do not need actors at all.
+- Moving an existing actor to another worker after spawn → not supported; spawn again if you need a new placement.
+
 ## Compared to similar tools
 
 | | remote-objects | Comlink | Piscina |
@@ -170,6 +219,10 @@ const handle = getActorHandle(counter); // { workerId, objectId } | undefined
 - Overlapping calls to the **same** actor are queued (mailbox); different actors may run in parallel
 - Actors are not migrated between workers; identity is fixed at spawn
 - Circular structures in encoded plain objects are rejected with a clear error
+- **`getOrSpawn` keys are per-runtime (in-memory)** — not shared across processes or runtimes
+- **`spawn` and `getOrSpawn` use separate registries** — a keyed name does not attach to an actor created with `spawn`
+- **Key placement is `hash(key) % workers`** — changing the worker pool size can move a key to a different worker on the next create (after `destroy`)
+- **Repeated `getOrSpawn` compares constructor args** using deep equality for primitives, arrays, and plain objects only (not `Date`, `Map`, class instances, etc.)
 
 ## License
 

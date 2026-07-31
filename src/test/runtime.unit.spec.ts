@@ -40,7 +40,7 @@ describe("remote-objects", () => {
 		expect(await counter.getValue()).toBe(15);
 	});
 
-	it("keeps actors sticky and round-robins spawn", async () => {
+	it("keeps actors sticky and load-balances spawn", async () => {
 		const runtime = track(new Runtime({ workers: 2 }));
 		const a = await runtime.spawn(Counter, 0);
 		const b = await runtime.spawn(Counter, 0);
@@ -58,6 +58,78 @@ describe("remote-objects", () => {
 		await b.inc();
 		expect(getActorHandle(a)?.workerId).toBe(0);
 		expect(getActorHandle(b)?.workerId).toBe(1);
+	});
+
+	it("getOrSpawn returns the same proxy for the same key", async () => {
+		const runtime = track(new Runtime({ workers: 2 }));
+		const a = await runtime.getOrSpawn("tenant-a", Counter, 10);
+		const b = await runtime.getOrSpawn("tenant-a", Counter, 10);
+
+		expect(a).toBe(b);
+		expect(getActorHandle(a)?.objectId).toBe(getActorHandle(b)?.objectId);
+		await a.inc();
+		expect(await b.getValue()).toBe(11);
+	});
+
+	it("getOrSpawn pins a key to a stable worker", async () => {
+		const runtime = track(new Runtime({ workers: 2 }));
+		const first = await runtime.getOrSpawn("shard-1", Counter, 0);
+		const handle = getActorHandle(first);
+
+		expect(handle).toBeTruthy();
+		await runtime.destroy(first);
+		const second = await runtime.getOrSpawn("shard-1", Counter, 0);
+
+		expect(getActorHandle(second)?.workerId).toBe(handle?.workerId);
+		expect(getActorHandle(second)?.objectId).not.toBe(handle?.objectId);
+	});
+
+	it("getOrSpawn rejects mismatched class or args for a key", async () => {
+		const runtime = track(new Runtime({ workers: 1 }));
+
+		await runtime.getOrSpawn("k", Counter, 1);
+
+		await expect(runtime.getOrSpawn("k", Counter, 2)).rejects.toThrow(
+			/different constructor arguments/,
+		);
+		await expect(
+			runtime.getOrSpawn("k", MailboxActor),
+		).rejects.toThrow(/already bound to Counter/);
+	});
+
+	it("destroy drops getOrSpawn entries", async () => {
+		const runtime = track(new Runtime({ workers: 1 }));
+		const first = await runtime.getOrSpawn("tenant", Counter, 0);
+
+		await runtime.destroy(first);
+		const second = await runtime.getOrSpawn("tenant", Counter, 0);
+
+		expect(second).not.toBe(first);
+		expect(getActorHandle(second)?.objectId).not.toBe(
+			getActorHandle(first)?.objectId,
+		);
+	});
+
+	it("getOrSpawn rejects an empty key", async () => {
+		const runtime = track(new Runtime({ workers: 1 }));
+
+		await expect(runtime.getOrSpawn("", Counter, 0)).rejects.toThrow(
+			/non-empty string/,
+		);
+	});
+
+	it("spawn and getOrSpawn with the same key are separate actors", async () => {
+		const runtime = track(new Runtime({ workers: 2 }));
+		const spawned = await runtime.spawn(Counter, 0);
+		const keyed = await runtime.getOrSpawn("db", Counter, 0);
+
+		expect(spawned).not.toBe(keyed);
+		const spawnedHandle = getActorHandle(spawned);
+		const keyedHandle = getActorHandle(keyed);
+
+		expect(
+			`${spawnedHandle?.workerId}:${spawnedHandle?.objectId}`,
+		).not.toBe(`${keyedHandle?.workerId}:${keyedHandle?.objectId}`);
 	});
 
 	it("returns proxy for return this", async () => {
