@@ -1,6 +1,6 @@
 {
   "name": "@js-ak/remote-objects",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Actor-style remote objects on Node.js worker threads - write normal classes, call them like local instances.",
   "publishConfig": {
     "access": "public",

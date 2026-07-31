@@ -1,3 +1,10 @@
+# [1.2.0](https://github.com/JS-AK/remote-objects/compare/v1.1.0...v1.2.0) (2026-07-31)
+
+
+### Features
+
+* **runtime:** add getOrSpawn and load-aware scheduling ([665abb5](https://github.com/JS-AK/remote-objects/commit/665abb5ceaf04a5f24e8288fa65fb68b76049169))
+
 # [1.1.0](https://github.com/JS-AK/remote-objects/compare/v1.0.0...v1.1.0) (2026-07-30)
 
 
