@@ -41,7 +41,12 @@ export class Serializer {
 	 * @returns Value safe to send via `postMessage`
 	 */
 	encode(value: unknown, context: EncodeContext = {}): unknown {
-		return this.walkEncode(value, context, new WeakSet<object>());
+		return this.walkEncode(
+			value,
+			context,
+			new WeakSet<object>(),
+			new Map<object, unknown>(),
+		);
 	}
 
 	/**
@@ -56,15 +61,18 @@ export class Serializer {
 
 	/**
 	 * Recursive encode walk. Throws on circular plain-object graphs.
+	 * Shared (non-circular) refs are duplicated on the wire.
 	 * @param value - Current node
 	 * @param context - Encode hooks
-	 * @param seen - Cycle detection set
+	 * @param inProgress - Objects currently being walked (cycle detection)
+	 * @param encoded - Finished wire copies keyed by source object
 	 * @returns Encoded node
 	 */
 	private walkEncode(
 		value: unknown,
 		context: EncodeContext,
-		seen: WeakSet<object>,
+		inProgress: WeakSet<object>,
+		encoded: Map<object, unknown>,
 	): unknown {
 		if (value === null || typeof value !== "object") {
 			if (typeof value === "function") {
@@ -123,28 +131,45 @@ export class Serializer {
 			if (ref) return ref;
 		}
 
-		if (seen.has(value)) {
+		if (inProgress.has(value)) {
 			throw new Error(
 				"Circular references are not supported when encoding values for remote calls",
 			);
 		}
 
-		if (Array.isArray(value)) {
-			seen.add(value);
+		if (encoded.has(value)) {
+			return structuredClone(encoded.get(value));
+		}
 
-			return value.map((item) => this.walkEncode(item, context, seen));
+		if (Array.isArray(value)) {
+			inProgress.add(value);
+
+			const result = value.map((item) => this.walkEncode(
+				item,
+				context,
+				inProgress,
+				encoded,
+			));
+
+			inProgress.delete(value);
+			encoded.set(value, result);
+
+			return result;
 		}
 
 		if (!isPlainObject(value)) {
 			return value;
 		}
 
-		seen.add(value);
+		inProgress.add(value);
 		const out: Record<string, unknown> = {};
 
 		for (const [key, item] of Object.entries(value)) {
-			out[key] = this.walkEncode(item, context, seen);
+			out[key] = this.walkEncode(item, context, inProgress, encoded);
 		}
+
+		inProgress.delete(value);
+		encoded.set(value, out);
 
 		return out;
 	}
