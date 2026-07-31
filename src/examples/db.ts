@@ -11,7 +11,8 @@ const creds: DbCreds = {
 
 const runtime = new Runtime({ debug: true, workers: 2 });
 
-const db = await runtime.spawn(Database, creds);
+// one pool for the app — reuse via getOrSpawn("main") from anywhere in-process
+const db = await runtime.getOrSpawn("main", Database, creds);
 
 try {
 	const one = await db.queryOne<{ n: number; }>("SELECT 1::int AS n");
@@ -22,7 +23,7 @@ try {
 
 	console.log("version ->", version?.version);
 
-	// two actors → round-robin across workers, each with its own pool
+	// second spawn → separate pool for parallel queries (load-balanced worker)
 	const db2 = await runtime.spawn(Database, creds);
 	const [a, b] = await Promise.all([
 		db.queryOne("SELECT 42::int AS worker_probe"),
@@ -30,6 +31,11 @@ try {
 	]);
 
 	console.log("parallel ->", { a, b });
+
+	// same key → same proxy as db (spawn above does not register "main")
+	const same = await runtime.getOrSpawn("main", Database, creds);
+
+	console.log("getOrSpawn reuse ->", same === db);
 
 	await db2.close();
 } finally {

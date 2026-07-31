@@ -87,6 +87,15 @@ export class WorkerNode {
 	private drainWaiters: Array<() => void> = [];
 
 	/**
+	 * Live actors plus in-flight host↔worker requests on this node.
+	 * Used by {@link Scheduler} for load-aware spawn placement.
+	 * @returns Scheduling weight (lower = preferred for new actors)
+	 */
+	getSchedulingLoad(): number {
+		return this.localObjects.size + this.pending.size;
+	}
+
+	/**
 	 * Spawns the ESM worker entry and wires message / error handlers.
 	 * @param options - Pool identity, shared registries, timeouts
 	 */
